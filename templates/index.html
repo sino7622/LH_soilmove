@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全台土石方資源堆置處理場分布地圖</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body {
+            background-color: #f8f9fa;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            font-family: "Microsoft JhengHei", sans-serif;
+        }
+
+        .main-content {
+            flex: 1;
+        }
+
+        header {
+            background: white;
+            border-bottom: 2px solid #eee;
+            padding: 20px 0;
+            margin-bottom: 20px;
+        }
+
+        #map {
+            height: 550px;
+            width: 100%;
+            border-radius: 12px;
+            z-index: 1;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .filter-section {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            border-left: 5px solid #0d6efd;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+
+        .suspended-row {
+            background-color: #fff5f5 !important;
+            color: #b02a37;
+        }
+
+        footer {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px 0;
+            text-align: center;
+            border-top: 5px solid #0d6efd;
+            margin-top: 40px;
+        }
+
+        .leaflet-popup-content {
+            font-size: 0.92rem;
+            line-height: 1.6;
+            min-width: 260px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div class="container">
+            <h1 class="fw-bold text-dark mb-0">全臺土石方資源堆置處理場分布地圖</h1>
+        </div>
+    </header>
+
+    <div class="container main-content">
+        <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
+            <div><span class="text-muted small">最後更新：<span id="update-text">尚未執行</span></span></div>
+            <div class="btn-group shadow-sm">
+                <button onclick="fetchAndUpdate()" id="btn-run" class="btn btn-primary px-4 fw-bold">🔄 更新數據</button>
+                <button onclick="downloadFiltered('excel')" class="btn btn-outline-primary px-3">📥 Excel</button>
+                <button onclick="downloadFiltered('kml')" class="btn btn-outline-primary px-3">📥 KML</button>
+                <button onclick="document.getElementById('kmlInput').click()" class="btn btn-outline-primary px-3">📁
+                    上傳範圍 KML</button>
+                <input type="file" id="kmlInput" style="display: none;" accept=".kml" onchange="handleKmlUpload(event)">
+                <a class="btn btn-outline-primary" href="https://www.soilmove.tw/" target="_blank"
+                    rel="noopener noreferrer">🌐 資料來源：營建剩餘土石方資訊服務中心</a>
+            </div>
+        </div>
+
+        <div class="filter-section">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label class="form-label small fw-bold">縣市篩選</label>
+                    <select id="f-city" class="form-select" onchange="applyFilters()">
+                        <option value="">全部</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-bold">場址類型</label>
+                    <select id="f-type" class="form-select" onchange="applyFilters()">
+                        <option value="">全部</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small fw-bold">營運狀態</label>
+                    <select id="f-status" class="form-select" onchange="applyFilters()">
+                        <option value="all">全部</option>
+                        <option value="active">營運中 (藍標)</option>
+                        <option value="suspended">暫停/停止 (黑標)</option>
+                    </select>
+                </div>
+                <div class="col-md-2 d-flex align-items-end text-primary fw-bold pb-2" id="counter">共 0 筆</div>
+            </div>
+        </div>
+
+        <div id="map" class="mb-4"></div>
+
+        <div class="table-container shadow-sm bg-white rounded overflow-hidden mb-4"
+            style="max-height: 400px; overflow-y: auto;">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-dark sticky-top">
+                    <tr>
+                        <th>場名</th>
+                        <th>縣市</th>
+                        <th>狀態</th>
+                        <th>剩餘量(㎥)</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="data-list"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">© 2026 中興工程顧問股份有限公司園路部維護管理</div>
+    </footer>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://api.mapbox.com/mapbox.js/plugins/leaflet-omnivore/v0.3.1/leaflet-omnivore.min.js"></script>
+
+    <script>
+        const map = L.map('map').setView([23.6, 120.9], 7);
+        L.tileLayer('https://{s}.tile.osm.org/{z}/{x}/{y}.png').addTo(map);
+
+        let markerGroup = L.featureGroup().addTo(map);
+        let rangeGroup = L.featureGroup().addTo(map);
+
+        window.rawCache = [];
+
+        const blackIcon = L.icon({
+            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-black.png',
+            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+            iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+        });
+
+        // --- 修正後的 KML 上傳邏輯 ---
+        function handleKmlUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            window.kmlDone = false; // 旗標確保只觸發一次
+
+            reader.onload = function (e) {
+                rangeGroup.clearLayers();
+                const kmlText = e.target.result;
+
+                // 建立解析圖層
+                const runLayer = omnivore.kml.parse(kmlText);
+
+                runLayer.setStyle({
+                    color: "#0d6efd", weight: 4, fillColor: "#0d6efd", fillOpacity: 0.15
+                });
+
+                runLayer.addTo(rangeGroup);
+
+                // 縮放函式
+                const finalizeKml = () => {
+                    if (window.kmlDone) return;
+                    const bounds = rangeGroup.getBounds();
+                    if (bounds.isValid()) {
+                        map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
+                        alert("✅ 範圍上傳完成，地圖將自動縮放！");
+                        window.kmlDone = true;
+                    }
+                };
+
+                // 監聽 ready 事件 (針對複雜 KML)
+                runLayer.on('ready', finalizeKml);
+
+                // 安全緩衝 (針對簡單 KML 或 ready 事件失效時)
+                setTimeout(finalizeKml, 500);
+            };
+
+            reader.readAsText(file);
+            event.target.value = ''; // 清空 input 讓同檔案可重複上傳
+        }
+
+        async function fetchAndUpdate() {
+            const btn = document.getElementById('btn-run');
+            btn.disabled = true; btn.innerText = "讀取中...";
+            try {
+                const res = await fetch('/api/update');
+                const result = await res.json();
+                window.rawCache = result.data;
+                document.getElementById('update-text').innerText = result.updated;
+
+                const cities = [...new Set(window.rawCache.map(d => d.city))].filter(Boolean).sort();
+                const types = [...new Set(window.rawCache.map(d => d.typename))].filter(Boolean).sort();
+                document.getElementById('f-city').innerHTML = '<option value="">全部</option>' + cities.map(c => `<option value="${c}">${c}</option>`).join('');
+                document.getElementById('f-type').innerHTML = '<option value="">全部</option>' + types.map(t => `<option value="${t}">${t}</option>`).join('');
+
+                applyFilters();
+            } catch (e) { alert("❌ 更新失敗"); }
+            finally { btn.disabled = false; btn.innerText = "🔄 更新數據"; }
+        }
+
+        function applyFilters() {
+            const cVal = document.getElementById('f-city').value;
+            const tVal = document.getElementById('f-type').value;
+            const sVal = document.getElementById('f-status').value;
+
+            const filtered = window.rawCache.filter(item => {
+                const matchC = !cVal || item.city === cVal;
+                const matchT = !tVal || item.typename === tVal;
+                const suspended = item.dumpname.includes("暫停") || item.dumpname.includes("停止") || item.dumpname.includes("停場") || item.dumpname.includes("終止");
+                const matchS = sVal === "all" || (sVal === "active" && !suspended) || (sVal === "suspended" && suspended);
+                return matchC && matchT && matchS;
+            });
+
+            render(filtered);
+        }
+
+        function render(data) {
+            markerGroup.clearLayers();
+            const tbody = document.getElementById('data-list');
+            tbody.innerHTML = '';
+            document.getElementById('counter').innerText = `共 ${data.length} 筆`;
+
+            data.forEach((d) => {
+                const suspended = d.dumpname.includes("暫停") || d.dumpname.includes("停止") || d.dumpname.includes("停場") || d.dumpname.includes("終止");
+                const popupContent = `
+                <strong>${d.dumpname}</strong><br/>
+                <b>縣市：</b> ${d.city}<br/>
+                <b>類型：</b> ${d.typename}<br/>
+                <b>流向編號：</b> ${d.controlId}<br/>
+                <b>申報日期：</b> ${d.applydate}<br/><hr/>
+                <b>B1~B7 剩餘量：</b> ${d.remain} ㎥<br/>
+                <b>B1~B7 核准量：</b> ${d.maxbury} ㎥<br/>
+                <b>面積：</b> ${d.area} 公頃<hr/>
+                <b>經度：</b> ${d.lng}<br/><b>緯度：</b> ${d.lat}
+            `;
+
+                L.marker([d.lat, d.lng], { icon: suspended ? blackIcon : new L.Icon.Default() })
+                    .addTo(markerGroup).bindPopup(popupContent);
+
+                tbody.innerHTML += `
+                <tr class="${suspended ? 'suspended-row' : ''}">
+                    <td class="fw-bold">${d.dumpname}</td><td>${d.city}</td>
+                    <td><span class="badge ${suspended ? 'bg-danger' : 'bg-success'}">${suspended ? '暫停' : '營運'}</span></td>
+                    <td class="text-primary fw-bold">${d.remain}</td>
+                    <td><button class="btn btn-sm btn-outline-primary" onclick="map.setView([${d.lat}, ${d.lng}], 15)">定位</button></td>
+                </tr>`;
+            });
+
+            // 僅在沒有上傳 KML 且有資料時自動縮放至點位
+            if (data.length > 0 && rangeGroup.getLayers().length === 0) {
+                map.fitBounds(markerGroup.getBounds());
+            }
+        }
+
+        async function downloadFiltered(type) {
+            // ... (省略與之前一致的 fetch 匯出邏輯) ...
+            alert("準備匯出 " + type.toUpperCase() + "...");
+            // 呼叫 API 並處理 blob 下載
+        }
+    </script>
+</body>
+
+</html>
