@@ -101,12 +101,20 @@
             <div><span class="text-muted small">資料狀態：<span id="update-text"
                         class="fw-bold text-primary">讀取中...</span></span></div>
             <div class="btn-group shadow-sm">
-                <button onclick="fetchAndUpdate()" id="btn-run" class="btn btn-primary btn-sm px-3">🔄 更新數據</button>
+                <!-- <button onclick="fetchAndUpdate()" id="btn-run" class="btn btn-primary btn-sm px-3">🔄 更新數據</button> -->
+
+                <button onclick="document.getElementById('jsonDataInput').click()" class="btn btn-warning btn-sm">📁
+                    抽換預設 JSON</button>
+
+                <input type="file" id="jsonDataInput" style="display: none;" accept=".json"
+                    onchange="uploadNewData(event)">
+
+
                 <button onclick="downloadFiltered('excel')" class="btn btn-outline-primary btn-sm">📥 Excel</button>
                 <button onclick="downloadFiltered('kml')" class="btn btn-outline-primary btn-sm">📥 KML</button>
-                <button onclick="document.getElementById('kmlInput').click()" class="btn btn-outline-primary btn-sm">📐
+                <button onclick="document.getElementById('kmlInput').click()" class="btn btn-outline-success btn-sm">📐
                     上傳範圍</button>
-                <button onclick="zoomToKml()" class="btn btn-outline-secondary btn-sm">🎯 縮放至範圍</button>
+                <button onclick="zoomToKml()" class="btn btn-outline-success btn-sm">🎯 縮放至範圍</button>
                 <input type="file" id="kmlInput" style="display: none;" accept=".kml" onchange="handleKmlUpload(event)">
             </div>
         </div>
@@ -162,7 +170,7 @@
     <script src="https://api.mapbox.com/mapbox.js/plugins/leaflet-omnivore/v0.3.1/leaflet-omnivore.min.js"></script>
 
     <script>
-        // --- 1. 初始化底圖控制 ---
+        // --- 1. 初始化地圖與底圖控制 ---
         const osm = L.tileLayer('https://{s}.tile.osm.org/{z}/{x}/{y}.png', { attribution: '© OSM' });
         const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
             attribution: 'Esri Satellite'
@@ -177,7 +185,7 @@
 
         window.rawCache = [];
 
-        // --- 2. 預設自動載入功能 ---
+        // --- 2. 視窗載入後自動讀取預設資料 ---
         window.onload = function () {
             loadDefaultData();
         };
@@ -195,6 +203,7 @@
             }
         }
 
+        // 更新下拉選單與核心快取
         function renderCore(result) {
             window.rawCache = result.data;
             const cities = [...new Set(window.rawCache.map(d => d.city))].filter(Boolean).sort();
@@ -204,6 +213,7 @@
             applyFilters();
         }
 
+        // 從後端 API 更新最新數據
         async function fetchAndUpdate() {
             const btn = document.getElementById('btn-run');
             btn.disabled = true; btn.innerText = "連線中...";
@@ -216,6 +226,7 @@
             finally { btn.disabled = false; btn.innerText = "🔄 更新數據"; }
         }
 
+        // 執行篩選邏輯
         function applyFilters() {
             const cVal = document.getElementById('f-city').value;
             const tVal = document.getElementById('f-type').value;
@@ -228,49 +239,41 @@
                 const matchS = sVal === "all" || (sVal === "active" && !suspended) || (sVal === "suspended" && suspended);
                 return matchC && matchT && matchS;
             });
-
-            // --- 根據篩選縮放地圖 ---
             renderMarkers();
         }
 
-        // ... (之前的底圖初始化保持不變)
-
-        // 修改 1: 讓標記渲染完後，自動根據「目前顯示的標記」縮放
         /**
- * 1. 渲染地圖標記與下方完整資訊表格
- */
+         * 3. 渲染地圖標記與下方 10 欄位表格
+         */
         function renderMarkers() {
-            // 1. 清除現有標記與表格內容
             markerGroup.clearLayers();
             const tbody = document.getElementById('data-list');
             tbody.innerHTML = '';
             document.getElementById('counter').innerText = `共 ${window.currentFiltered.length} 筆`;
 
-            // 2. 遍歷篩選後的資料
             window.currentFiltered.forEach(d => {
-                // 判斷是否為暫停狀態
                 const suspended = /暫停|停止|停場|終止/.test(d.dumpname || "");
 
-                // --- 建立地圖標記與詳細 Popup ---
+                // 建立 Popup 內容
                 const popupContent = `
-            <div style="min-width:220px; font-family: 'Microsoft JhengHei', sans-serif;">
-                <strong style="font-size:1.2em; color:#0d6efd;">${d.dumpname || "未命名"}</strong><br/>
-                <div style="margin-top:8px; line-height:1.6;">
-                    <b>📍 縣市：</b> ${d.city || "－"}<br/>
-                    <b>🏷️ 類型：</b> ${d.typename || "－"}<br/>
-                    <b>🆔 流向編號：</b> <code>${d.controlId || "－"}</code><br/>
-                    <b>📅 申報日期：</b> ${d.applydate || "－"}<br/>
-                    <hr style="margin:8px 0; border:0; border-top:1px solid #eee;"/>
-                    <b>📊 B1~B7 剩餘填埋量：</b> ${Number(d.remain || 0).toLocaleString()} ㎥<br/>
-                    <b>📈 B1~B7 核准填埋量：</b> ${Number(d.maxbury || 0).toLocaleString()} ㎥<br/>
-                    <b>📐 面積：</b> ${d.area || "0"} 公頃<br/>
-                    <hr style="margin:8px 0; border:0; border-top:1px solid #eee;"/>
-                    <small class="text-muted">經緯度：${parseFloat(d.lat).toFixed(5)}, ${parseFloat(d.lng).toFixed(5)}</small>
-                    ${suspended ? '<div style="margin-top:5px; color:#d63384; font-weight:bold; border:1px solid #d63384; text-align:center; border-radius:4px;">⚠️ 狀態：暫停/停止中</div>' : ""}
-                </div>
-            </div>
-        `;
+                <div style="min-width:220px; font-family: 'Microsoft JhengHei', sans-serif;">
+                    <strong style="font-size:1.2em; color:#0d6efd;">${d.dumpname || "未命名"}</strong><br/>
+                    <div style="margin-top:8px; line-height:1.6;">
+                        <b>📍 縣市：</b> ${d.city || "－"}<br/>
+                        <b>🏷️ 類型：</b> ${d.typename || "－"}<br/>
+                        <b>🆔 流向編號：</b> <code>${d.controlId || "－"}</code><br/>
+                        <b>📅 申報日期：</b> ${d.applydate || "－"}<br/>
+                        <hr style="margin:8px 0; border:0; border-top:1px solid #eee;"/>
+                        <b>📊 剩餘填埋量：</b> ${Number(d.remain || 0).toLocaleString()} ㎥<br/>
+                        <b>📈 核准填埋量：</b> ${Number(d.maxbury || 0).toLocaleString()} ㎥<br/>
+                        <b>📐 面積：</b> ${d.area || "0"} 公頃<br/>
+                        <hr style="margin:8px 0; border:0; border-top:1px solid #eee;"/>
+                        <small class="text-muted">經緯度：${parseFloat(d.lat).toFixed(5)}, ${parseFloat(d.lng).toFixed(5)}</small>
+                        ${suspended ? '<div style="margin-top:5px; color:#d63384; font-weight:bold; border:1px solid #d63384; text-align:center; border-radius:4px;">⚠️ 狀態：暫停/停止中</div>' : ""}
+                    </div>
+                </div>`;
 
+                // 建立標記
                 const marker = L.marker([d.lat, d.lng], {
                     icon: suspended ? L.icon({
                         iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-black.png',
@@ -279,35 +282,28 @@
                     }) : new L.Icon.Default()
                 }).addTo(markerGroup).bindPopup(popupContent);
 
-                // 3. 填入下方表格完整欄位
+                // 填入表格
                 const tr = document.createElement('tr');
                 if (suspended) tr.className = 'suspended-row';
-
                 tr.innerHTML = `
-            <td><div class="fw-bold text-primary" style="min-width:150px;">${d.dumpname || "－"}</div></td>
-            <td>${d.city || "－"}</td>
-            <td><small>${d.typename || "－"}</small></td>
-            <td><code>${d.controlId || "－"}</code></td>
-            <td><small>${d.applydate || "－"}</small></td>
-            <td class="text-end fw-bold">${Number(d.remain || 0).toLocaleString()}</td>
-            <td class="text-end">${Number(d.maxbury || 0).toLocaleString()}</td>
-            <td class="text-end">${d.area || "0"}</td>
-            <td>
-                <span class="badge ${suspended ? 'bg-danger' : 'bg-success'}">
-                    ${suspended ? '暫停' : '營運'}
-                </span>
-            </td>
-            <td>
-                <button class="btn btn-sm btn-outline-primary" 
+                <td><div class="fw-bold text-primary" style="min-width:150px;">${d.dumpname || "－"}</div></td>
+                <td>${d.city || "－"}</td>
+                <td><small>${d.typename || "－"}</small></td>
+                <td><code>${d.controlId || "－"}</code></td>
+                <td><small>${d.applydate || "－"}</small></td>
+                <td class="text-end fw-bold">${Number(d.remain || 0).toLocaleString()}</td>
+                <td class="text-end">${Number(d.maxbury || 0).toLocaleString()}</td>
+                <td class="text-end">${d.area || "0"}</td>
+                <td><span class="badge ${suspended ? 'bg-danger' : 'bg-success'}">${suspended ? '暫停' : '營營'}</span></td>
+                <td>
+                    <button class="btn btn-sm btn-outline-primary" 
                         onclick="map.setView([${d.lat}, ${d.lng}], 15); markerGroup.eachLayer(l => {if(l.getLatLng && l.getLatLng().lat == ${d.lat} && l.getLatLng().lng == ${d.lng}) l.openPopup();});">
-                    定位
-                </button>
-            </td>
-        `;
+                        定位
+                    </button>
+                </td>`;
                 tbody.appendChild(tr);
             });
 
-            // 4. 自動縮放邏輯
             if (window.currentFiltered.length > 0) {
                 map.fitBounds(markerGroup.getBounds(), { padding: [50, 50], maxZoom: 13 });
             } else {
@@ -316,95 +312,84 @@
         }
 
         /**
- * 新增功能：手動縮放至 KML 範圍
- */
+         * 4. KML 處理邏輯
+         */
+        // 手動縮放至 KML 範圍
         function zoomToKml() {
-            // 檢查目前地圖上是否有載入 KML 範圍
             if (rangeGroup.getLayers().length === 0) {
                 alert("請先上傳 KML 範圍檔案");
                 return;
             }
-
-            // 取得範圍邊界
             const bounds = rangeGroup.getBounds();
-
             if (bounds.isValid()) {
-                // 執行縮放
-                map.fitBounds(bounds, {
-                    padding: [50, 50],
-                    maxZoom: 15,
-                    animate: true
-                });
+                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: true });
             }
         }
 
-        /**
-         * 2. KML 上傳處理與自動縮放
-         */
+        // KML 上傳 (不縮放、實線、完成提示)
         function handleKmlUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
-
             const reader = new FileReader();
             reader.onload = (e) => {
-                // 1. 清除舊有的範圍圖層
                 rangeGroup.clearLayers();
-
-                // 2. 解析 KML 文字內容 (支援 LineString 座標結構) [cite: 1, 6]
                 const kmlLayer = omnivore.kml.parse(e.target.result);
+                kmlLayer.setStyle({ color: "#0055ff", weight: 4, fillOpacity: 0.1 }); // 藍色實線
 
-                // 3. 設定範圍樣式 (藍色虛線邊框) [cite: 7]
-                kmlLayer.setStyle({
-                    color: "#0055ff",
-                    weight: 4,
-                    fillOpacity: 0.1,
-                    //dashArray: '8, 8'
-                });
-
-                // 4. 直接加入地圖，不執行縮放與提示
                 kmlLayer.addTo(rangeGroup);
-                // 跳出完成框 (使用延遲確保背景渲染順利)
-                setTimeout(() => {
-                    alert(`✅ 範圍邊界上傳完成！\n檔案名稱：${file.name}`);
-                }, 100);
+                setTimeout(() => { alert(`✅ 範圍邊界上傳完成！\n檔案名稱：${file.name}`); }, 100);
+                ;
             };
-
             reader.readAsText(file);
-
-            // 重置 input 以便下次可以重新上傳
-            event.target.value = '';
+            event.target.value = ''; // 重置 input
         }
 
+        /**
+         * 5. 資料匯出與抽換邏輯
+         */
         async function downloadFiltered(type) {
             if (!window.currentFiltered || !window.currentFiltered.length) return alert("請先載入數據");
-
             try {
                 const res = await fetch(`/api/export/${type}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ data: window.currentFiltered })
                 });
-
-                // 核心修正：如果後端報錯，不要當成檔案下載，而是顯示錯誤訊息
                 if (!res.ok) {
                     const errorJson = await res.json();
                     alert("匯出失敗：" + errorJson.error);
                     return;
                 }
-
                 const blob = await res.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                // 設定正確的下載檔名
                 a.download = `土資場資料_${new Date().getTime()}.${type === 'excel' ? 'xlsx' : 'kml'}`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-            } catch (err) {
-                alert("網路連線錯誤或伺服器無回應");
-            }
+            } catch (err) { alert("網路連線錯誤或伺服器無回應"); }
+        }
+
+        // 抽換伺服器上的預設 JSON
+        async function uploadNewData(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const res = await fetch('/api/upload_default_json', { method: 'POST', body: formData });
+                const result = await res.json();
+                if (res.ok) {
+                    renderCore(result);
+                    document.getElementById('update-text').innerText = result.updated + " (已手動覆蓋預設存檔)";
+                    alert("✅ 預設資料庫 (data.json) 已成功更換並重新載入！");
+                } else {
+                    alert("❌ 上傳失敗：" + result.error);
+                }
+            } catch (e) { alert("❌ 無法連接伺服器，請確認後端 API 已建立"); }
+            finally { event.target.value = ''; }
         }
     </script>
 </body>
