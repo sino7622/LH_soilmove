@@ -252,7 +252,7 @@
             document.getElementById('counter').innerText = `共 ${window.currentFiltered.length} 筆`;
 
             window.currentFiltered.forEach(d => {
-                const suspended = /暫停|停止|停場|終止/.test(d.dumpname || "");
+                const suspended = /暫停|停止|停場|註銷|屆滿|封場|廢止|撤銷|終止/.test(d.dumpname || "");
 
                 // 建立 Popup 內容
                 const popupContent = `
