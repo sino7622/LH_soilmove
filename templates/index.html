@@ -235,7 +235,7 @@
             window.currentFiltered = window.rawCache.filter(item => {
                 const matchC = !cVal || item.city === cVal;
                 const matchT = !tVal || item.typename === tVal;
-                const suspended = /暫停|停止|停場|終止/.test(item.dumpname);
+                const suspended = /暫停|停止|停場|註銷|屆滿|封場|廢止|撤銷|終止/.test(item.dumpname);
                 const matchS = sVal === "all" || (sVal === "active" && !suspended) || (sVal === "suspended" && suspended);
                 return matchC && matchT && matchS;
             });
