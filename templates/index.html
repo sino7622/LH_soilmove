@@ -294,7 +294,7 @@
                 <td class="text-end fw-bold">${Number(d.remain || 0).toLocaleString()}</td>
                 <td class="text-end">${Number(d.maxbury || 0).toLocaleString()}</td>
                 <td class="text-end">${d.area || "0"}</td>
-                <td><span class="badge ${suspended ? 'bg-danger' : 'bg-success'}">${suspended ? '暫停' : '營營'}</span></td>
+                <td><span class="badge ${suspended ? 'bg-danger' : 'bg-success'}">${suspended ? '暫停' : '營運'}</span></td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary" 
                         onclick="map.setView([${d.lat}, ${d.lng}], 15); markerGroup.eachLayer(l => {if(l.getLatLng && l.getLatLng().lat == ${d.lat} && l.getLatLng().lng == ${d.lng}) l.openPopup();});">
