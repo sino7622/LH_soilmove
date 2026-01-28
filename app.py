@@ -64,31 +64,62 @@ def api_update():
         # if request.args.get("key") != os.environ.get("UPDATE_KEY"):
         #     return jsonify({"error": "unauthorized"}), 403
 
-        # ---- 1) 模擬瀏覽行為以取得 Session ----
-        # 建議不要 verify=False；若真的遇到 TLS 問題再開
-        session.get(base_url, timeout=15)  # , verify=False
-        time.sleep(1)
+        # ---- 1) 模擬瀏覽行為以取得 Session（拿 cookie）----
+        headers_get = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        g = session.get(base_url, headers=headers_get, timeout=15, allow_redirects=True)
 
-        # ---- 2) 發送請求獲取資料 ----
+        # 若被導到奇怪頁面，先把前 200 字回傳（超關鍵）
+        if g.status_code >= 400:
+            return jsonify({
+                "error": "BasePageFailed",
+                "status_code": g.status_code,
+                "sample": (g.text or "")[:200]
+            }), 502
+
+        time.sleep(0.5)
+
+        # ---- 2) 用更像 XHR 的 headers 去 POST ----
+        headers_post = {
+            "User-Agent": headers_get["User-Agent"],
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": "https://www.soilmove.tw",
+            "Referer": base_url,
+        }
+
         r = session.post(
             url,
             data={"city": ""},
-            headers={"Referer": base_url},
+            headers=headers_post,
             timeout=25,
-            # verify=False
+            allow_redirects=True
         )
-        r.raise_for_status()
 
-        # ---- 3) 防呆：先拿 text，再嘗試 json（避免回 HTML 直接 500）----
-        text = r.text
-        try:
-            payload = r.json()
-        except Exception:
+        text = (r.text or "").strip()
+
+        # 狀態碼不對才擋
+        if r.status_code != 200:
             return jsonify({
-                "error": "UpstreamNotJSON",
+                "error": "UpstreamBadStatus",
                 "status_code": r.status_code,
                 "sample": text[:200]
             }), 502
+
+        # ✅ Content-Type 不管它，改看內容是不是 JSON 開頭
+        if not (text.startswith("{") or text.startswith("[")):
+            return jsonify({
+                "error": "UpstreamNotJSON",
+                "status_code": r.status_code,
+                "content_type": r.headers.get("Content-Type", ""),
+                "sample": text[:200]
+            }), 502
+
+        # ✅ 用 json.loads 解析（比 r.json() 更可控）
+        payload = json.loads(text)
 
         # ---- 4) 轉 DataFrame ----
         df = pd.DataFrame(payload)

@@ -197,9 +197,9 @@
                 if (!res.ok) throw new Error();
                 const result = await res.json();
                 renderCore(result);
-                statusText.innerText = result.updated + " (從預設存檔載入)";
+                statusText.innerText = result.updated + " (請點擊更新數據)";
             } catch (e) {
-                statusText.innerText = "尚未有預設存檔，請點擊更新數據";
+                statusText.innerText = "尚未有資料，請點擊更新數據";
             }
         }
 
