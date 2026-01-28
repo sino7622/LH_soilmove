@@ -59,9 +59,12 @@ def main():
 
     text = (r.text or "").lstrip("\ufeff").strip()
 
-    # ✅ 不看 Content-Type，直接 parse（因為它會亂標 text/html）
     if not (text.startswith("[") or text.startswith("{")):
-        raise RuntimeError(f"Upstream not JSON. sample={text[:200]}")
+        print("⚠️ Upstream not JSON (likely blocked by WAF)")
+        print("⚠️ Sample:")
+        print(text[:300])
+        print("⚠️ Skipping update; keeping existing data.json unchanged.")
+        return  # ← 關鍵：不要 raise
 
     payload = json.loads(text)
     df = pd.DataFrame(payload)
