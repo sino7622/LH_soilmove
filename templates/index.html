@@ -213,17 +213,38 @@
             applyFilters();
         }
 
-        // 從後端 API 更新最新數據
+        // 重新從後端讀取「最新資料」（由 GitHub Actions 更新）
         async function fetchAndUpdate() {
             const btn = document.getElementById('btn-run');
-            btn.disabled = true; btn.innerText = "連線中...";
+            btn.disabled = true;
+            btn.innerText = "讀取中...";
+
             try {
-                const res = await fetch('/api/update');
+                const res = await fetch('/api/local_data', { cache: 'no-store' });
+                if (!res.ok) throw new Error('fetch failed');
+
                 const result = await res.json();
+
+                // 你原本的資料渲染核心
                 renderCore(result);
-                document.getElementById('update-text').innerText = result.updated;
-            } catch (e) { alert("❌ 更新失敗，請稍後再試"); }
-            finally { btn.disabled = false; btn.innerText = "🔄 更新數據"; }
+
+                // 顯示更新時間
+                if (result.updated) {
+                    document.getElementById('update-text').innerText = result.updated;
+                }
+
+                // 如果你想顯示資料來源（repo / tmp）
+                if (result.source) {
+                    console.log("data source:", result.source);
+                }
+
+            } catch (e) {
+                console.error(e);
+                alert("❌ 資料讀取失敗，請稍後再試");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "🔄 重新載入資料";
+            }
         }
 
         // 執行篩選邏輯

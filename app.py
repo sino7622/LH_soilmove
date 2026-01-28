@@ -12,204 +12,124 @@ from urllib3.exceptions import InsecureRequestWarning
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# 忽略 SSL 安全警告
-urllib3.disable_warnings(InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# 預設存檔路徑
-# DATA_FILE = os.path.join("/tmp", "data.json")
-DATA_FILE = "data.json"
+# repo 內固定的 data.json（GitHub Actions 會更新它）
+REPO_DATA_FILE = os.path.join(os.path.dirname(__file__), "data.json")
 
-def get_robust_session():
-    """設定具備重試機制的連線階段"""
-    session = requests.Session()
-    retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
-    session.mount('https://', HTTPAdapter(max_retries=retries))
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "X-Requested-With": "XMLHttpRequest"
-    })
-    return session
-
-@app.route('/')
-def index():
-    """主頁面渲染"""
-    return render_template('index.html')
-
-# @app.route('/api/local_data')
-# def local_data():
-#     try:
-#         if os.path.exists(DATA_FILE):
-#             with open(DATA_FILE, 'r', encoding='utf-8') as f:
-#                 return jsonify(json.load(f))
-#         else:
-#             return jsonify({
-#                 "updated": "尚未更新",
-#                 "data": []
-#             })
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
+# Vercel serverless 可寫的暫存區（非持久化）
+TMP_DATA_FILE = os.path.join("/tmp", "data.json")
 
 
-# @app.route('/api/update', methods=['GET'])
-# def api_update():
-#     """從目標網站抓取最新土資場資料，並寫入 /tmp/data.json（serverless cache）"""
-#     try:
-#         url = "https://www.soilmove.tw/soilmove/dumpsiteGisQueryList"
-#         base_url = "https://www.soilmove.tw/soilmove/dumpsiteGisQuery"
+def load_json_safely(path: str):
+    """安全讀 JSON，不存在就回 None"""
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-#         session = get_robust_session()
 
-#         # 如果你要保護這支 API，解除註解（並在 Vercel 設 UPDATE_KEY 環境變數）
-#         # if request.args.get("key") != os.environ.get("UPDATE_KEY"):
-#         #     return jsonify({"error": "unauthorized"}), 403
-
-#         # ---- 1) 模擬瀏覽行為以取得 Session（拿 cookie）----
-#         headers_get = {
-#             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-#             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-#         }
-#         g = session.get(base_url, headers=headers_get, timeout=15, allow_redirects=True)
-
-#         # 若被導到奇怪頁面，先把前 200 字回傳（超關鍵）
-#         if g.status_code >= 400:
-#             return jsonify({
-#                 "error": "BasePageFailed",
-#                 "status_code": g.status_code,
-#                 "sample": (g.text or "")[:200]
-#             }), 502
-
-#         time.sleep(0.5)
-
-#         # ---- 2) 用更像 XHR 的 headers 去 POST ----
-#         headers_post = {
-#             "User-Agent": headers_get["User-Agent"],
-#             "Accept": "application/json, text/plain, */*",
-#             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-#             "X-Requested-With": "XMLHttpRequest",
-#             "Origin": "https://www.soilmove.tw",
-#             "Referer": base_url,
-#         }
-
-#         r = session.post(
-#             url,
-#             data={"city": ""},
-#             headers=headers_post,
-#             timeout=25,
-#             allow_redirects=True
-#         )
-
-#         text = (r.text or "").strip()
-
-#         # 狀態碼不對才擋
-#         if r.status_code != 200:
-#             return jsonify({
-#                 "error": "UpstreamBadStatus",
-#                 "status_code": r.status_code,
-#                 "sample": text[:200]
-#             }), 502
-
-#         # ✅ Content-Type 不管它，改看內容是不是 JSON 開頭
-#         if not (text.startswith("{") or text.startswith("[")):
-#             return jsonify({
-#                 "error": "UpstreamNotJSON",
-#                 "status_code": r.status_code,
-#                 "content_type": r.headers.get("Content-Type", ""),
-#                 "sample": text[:200]
-#             }), 502
-
-#         # ✅ 用 json.loads 解析（比 r.json() 更可控）
-#         payload = json.loads(text)
-
-#         # ---- 4) 轉 DataFrame ----
-#         df = pd.DataFrame(payload)
-#         if df.empty:
-#             result_content = {
-#                 "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-#                 "data": []
-#             }
-#             # 寫入 /tmp（可選）
-#             os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-#             with open(DATA_FILE, 'w', encoding='utf-8') as f:
-#                 json.dump(result_content, f, ensure_ascii=False, indent=4)
-#             return jsonify(result_content)
-
-#         # ---- 5) 座標校正：判斷經緯度是否反置 ----
-#         def fix_coords(row):
-#             try:
-#                 x = float(row.get("x", 0) or 0)
-#                 y = float(row.get("y", 0) or 0)
-
-#                 # 台灣經度約 118~125
-#                 if 118 < x < 125:
-#                     return pd.Series([x, y])
-#                 if 118 < y < 125:
-#                     return pd.Series([y, x])
-#                 return pd.Series([0.0, 0.0])
-#             except Exception:
-#                 return pd.Series([0.0, 0.0])
-
-#         # 若 x/y 欄位不存在也不會炸
-#         if "x" not in df.columns:
-#             df["x"] = 0
-#         if "y" not in df.columns:
-#             df["y"] = 0
-
-#         df[["lng", "lat"]] = df.apply(fix_coords, axis=1)
-#         df = df[(df["lng"] > 0) & (df["lat"] > 0)].copy()
-
-#         # ---- 6) 組回傳內容 ----
-#         result_content = {
-#             "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-#             "data": df.fillna("").to_dict(orient="records")
-#         }
-
-#         # ---- 7) 寫入 /tmp/data.json（serverless cache）----
-#         os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-#         with open(DATA_FILE, 'w', encoding='utf-8') as f:
-#             json.dump(result_content, f, ensure_ascii=False, indent=4)
-
-#         return jsonify(result_content)
-
-#     except Exception as e:
-#         # 回傳更可診斷的錯誤（不要太長）
-#         return jsonify({
-#             "error": str(e),
-#             "hint": "常見原因：上游回應非 JSON、timeout、或 session 抓不到資料"
-#         }), 500
-    
-@app.route('/api/update')
-def api_update():
-    return jsonify({"message": "Update handled by GitHub Actions"}), 200
-
-@app.route('/api/local_data')
-def local_data():
-    with open("data.json", "r", encoding="utf-8") as f:
-        return jsonify(json.load(f))
-    
-@app.route('/api/upload_default_json', methods=['POST'])
-def upload_default_json():
-    """接收前端傳來的 JSON 檔案並覆寫伺服器上的預設存檔"""
+@app.route("/", methods=["GET"])
+def home():
+    # 如果你原本有 templates/index.html，這裡就能正常 render
+    # 沒有模板的話，你也可以改成回傳簡單訊息
     try:
-        if 'file' not in request.files:
-            return jsonify({"error": "未選取檔案"}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({"error": "檔案名稱不可為空"}), 400
+        return render_template("index.html")
+    except Exception:
+        return "Soilmove Viewer is running.", 200
 
-        # 直接覆蓋儲存 data.json
-        file.save(DATA_FILE)
 
-        # 重新讀取新存好的資料內容回傳前端
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            new_data = json.load(f)
+@app.route("/api/health", methods=["GET"])
+def health():
+    return jsonify({
+        "ok": True,
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "repo_data_exists": os.path.exists(REPO_DATA_FILE),
+        "tmp_data_exists": os.path.exists(TMP_DATA_FILE),
+    }), 200
+
+
+@app.route("/api/local_data", methods=["GET"])
+def api_local_data():
+    """
+    讀取資料（建議前端只打這支）：
+    1) 若 /tmp/data.json 存在（例如你有上傳暫存），就優先回傳它
+    2) 否則回傳 repo 內 data.json（由 GitHub Actions 定期更新）
+    """
+    try:
+        data = load_json_safely(TMP_DATA_FILE)
+        if data is not None:
+            data["source"] = "tmp"
+            return jsonify(data), 200
+
+        data = load_json_safely(REPO_DATA_FILE)
+        if data is not None:
+            data["source"] = "repo"
+            return jsonify(data), 200
 
         return jsonify({
-            "updated": new_data.get("updated", "手動更新"),
-            "data": new_data.get("data", [])
-        })
+            "updated": "尚未有資料",
+            "data": [],
+            "source": "none"
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/update", methods=["GET"])
+def api_update():
+    """
+    不再由 Vercel/Flask 去抓 soilmove.tw（會被 WAF 擋）。
+    更新由 GitHub Actions 定期跑 scripts/update_data.py 覆寫 repo 的 data.json。
+    """
+    return jsonify({
+        "message": "Updates are handled by GitHub Actions. Please check data.json commits in the repo.",
+        "hint": "Call /api/local_data to get the latest cached/repo data."
+    }), 200
+
+
+@app.route("/api/upload_default_json", methods=["POST"])
+def upload_default_json():
+    """
+    接收前端上傳 JSON，僅暫存到 /tmp/data.json（serverless cache）
+    注意：/tmp 不保證持久，冷啟動或換 instance 會消失
+    """
+    try:
+        if "file" not in request.files:
+            return jsonify({"error": "未選取檔案"}), 400
+
+        file = request.files["file"]
+        if not file or file.filename == "":
+            return jsonify({"error": "檔案名稱不可為空"}), 400
+
+        # 先解析驗證（避免寫入壞檔）
+        try:
+            payload = json.load(file.stream)
+        except Exception as e:
+            return jsonify({"error": f"JSON 解析失敗: {str(e)}"}), 400
+
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON 格式不正確：頂層必須是物件(dict)，需包含 updated/data"}), 400
+
+        updated = payload.get("updated", "手動更新")
+        data = payload.get("data", [])
+        if not isinstance(data, list):
+            return jsonify({"error": "JSON 格式不正確：data 必須是陣列(list)"}), 400
+
+        # 寫入 /tmp
+        os.makedirs(os.path.dirname(TMP_DATA_FILE), exist_ok=True)
+        with open(TMP_DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        return jsonify({
+            "updated": updated,
+            "count": len(data),
+            "stored": "tmp",
+            "note": "This is temporary storage on serverless (/tmp). It may disappear after cold start."
+        }), 200
+
     except Exception as e:
         return jsonify({"error": f"伺服器儲存失敗: {str(e)}"}), 500
     
