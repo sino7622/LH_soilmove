@@ -197,7 +197,7 @@
                 if (!res.ok) throw new Error();
                 const result = await res.json();
                 renderCore(result);
-                statusText.innerText = result.updated + " (請點擊更新數據)";
+                statusText.innerText = result.updated;
             } catch (e) {
                 statusText.innerText = "尚未有資料，請點擊更新數據";
             }
