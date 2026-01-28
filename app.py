@@ -18,7 +18,7 @@ urllib3.disable_warnings(InsecureRequestWarning)
 app = Flask(__name__)
 
 # 預設存檔路徑
-DATA_FILE = 'data.json'
+DATA_FILE = os.path.join("/tmp", "data.json")
 
 def get_robust_session():
     """設定具備重試機制的連線階段"""
@@ -37,60 +37,116 @@ def index():
     return render_template('index.html')
 
 @app.route('/api/local_data')
-def get_local_data():
-    """讀取伺服器上預設的 data.json 檔案"""
-    if os.path.exists(DATA_FILE):
-        try:
+def local_data():
+    try:
+        if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                content = json.load(f)
-                return jsonify(content)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-    return jsonify({"error": "No default data found"}), 404
+                return jsonify(json.load(f))
+        else:
+            return jsonify({
+                "updated": "尚未更新",
+                "data": []
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route('/api/update')
+
+@app.route('/api/update', methods=['GET'])
 def api_update():
-    """從目標網站抓取最新土資場資料"""
+    """從目標網站抓取最新土資場資料，並寫入 /tmp/data.json（serverless cache）"""
     try:
         url = "https://www.soilmove.tw/soilmove/dumpsiteGisQueryList"
         base_url = "https://www.soilmove.tw/soilmove/dumpsiteGisQuery"
+
         session = get_robust_session()
-        
-        # 模擬瀏覽行為以取得 Session
-        session.get(base_url, timeout=15, verify=False)
+
+        # 如果你要保護這支 API，解除註解（並在 Vercel 設 UPDATE_KEY 環境變數）
+        # if request.args.get("key") != os.environ.get("UPDATE_KEY"):
+        #     return jsonify({"error": "unauthorized"}), 403
+
+        # ---- 1) 模擬瀏覽行為以取得 Session ----
+        # 建議不要 verify=False；若真的遇到 TLS 問題再開
+        session.get(base_url, timeout=15)  # , verify=False
         time.sleep(1)
-        
-        # 發送請求獲取資料
-        r = session.post(url, data={"city": ""}, headers={"Referer": base_url}, timeout=25, verify=False)
+
+        # ---- 2) 發送請求獲取資料 ----
+        r = session.post(
+            url,
+            data={"city": ""},
+            headers={"Referer": base_url},
+            timeout=25,
+            # verify=False
+        )
         r.raise_for_status()
-        
-        df = pd.DataFrame(r.json())
-        
-        # 座標校正邏輯：判斷經緯度是否反置
+
+        # ---- 3) 防呆：先拿 text，再嘗試 json（避免回 HTML 直接 500）----
+        text = r.text
+        try:
+            payload = r.json()
+        except Exception:
+            return jsonify({
+                "error": "UpstreamNotJSON",
+                "status_code": r.status_code,
+                "sample": text[:200]
+            }), 502
+
+        # ---- 4) 轉 DataFrame ----
+        df = pd.DataFrame(payload)
+        if df.empty:
+            result_content = {
+                "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "data": []
+            }
+            # 寫入 /tmp（可選）
+            os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(result_content, f, ensure_ascii=False, indent=4)
+            return jsonify(result_content)
+
+        # ---- 5) 座標校正：判斷經緯度是否反置 ----
         def fix_coords(row):
             try:
-                x, y = float(row.get("x", 0)), float(row.get("y", 0))
-                if 118 < x < 125: return pd.Series([x, y])
-                if 118 < y < 125: return pd.Series([y, x])
-                return pd.Series([0, 0])
-            except: return pd.Series([0, 0])
-            
+                x = float(row.get("x", 0) or 0)
+                y = float(row.get("y", 0) or 0)
+
+                # 台灣經度約 118~125
+                if 118 < x < 125:
+                    return pd.Series([x, y])
+                if 118 < y < 125:
+                    return pd.Series([y, x])
+                return pd.Series([0.0, 0.0])
+            except Exception:
+                return pd.Series([0.0, 0.0])
+
+        # 若 x/y 欄位不存在也不會炸
+        if "x" not in df.columns:
+            df["x"] = 0
+        if "y" not in df.columns:
+            df["y"] = 0
+
         df[["lng", "lat"]] = df.apply(fix_coords, axis=1)
         df = df[(df["lng"] > 0) & (df["lat"] > 0)].copy()
-        
+
+        # ---- 6) 組回傳內容 ----
         result_content = {
-            "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+            "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "data": df.fillna("").to_dict(orient="records")
         }
 
-        # 更新完畢後自動覆蓋 data.json
+        # ---- 7) 寫入 /tmp/data.json（serverless cache）----
+        os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(result_content, f, ensure_ascii=False, indent=4)
 
         return jsonify(result_content)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
+    except Exception as e:
+        # 回傳更可診斷的錯誤（不要太長）
+        return jsonify({
+            "error": str(e),
+            "hint": "常見原因：上游回應非 JSON、timeout、或 session 抓不到資料"
+        }), 500
+    
 @app.route('/api/upload_default_json', methods=['POST'])
 def upload_default_json():
     """接收前端傳來的 JSON 檔案並覆寫伺服器上的預設存檔"""
